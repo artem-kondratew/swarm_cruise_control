@@ -1,0 +1,17 @@
+/**:
+  ros__parameters:
+    dt: 0.05
+    robots_ids: [1, 2, 3]
+    pacemaker_idx: 1                              # top-level pacemaker (for marker color)
+    noise_std: 0.02
+    init_x: [0.0, -1.0, -2.0]                    # robot1 at 0, robot2 1m behind, robot3 2m behind
+    init_y: [0.0,  0.0,  0.0]
+    init_theta: [0.0, 0.0, 0.0]
+    follower_peer_ids: [1, 2]                     # robot2 observes robot1, robot3 observes robot2
+    follower_map_frames: ['robot2/map', 'robot3/map']
+    lidar_frames: ['lidar', 'laser']
+    lidar_offset_x: 0.0
+    lidar_offset_y: 0.0
+    lidar_offset_theta: 0.0
+    fov_min_radius: 0.2
+    fov_max_radius: 1.4

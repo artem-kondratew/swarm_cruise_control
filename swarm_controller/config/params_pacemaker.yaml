@@ -1,0 +1,10 @@
+/**:
+  ros__parameters:
+    logs_dir: /home/user/swarm_ws/swarm_logs
+    pacemaker_idx: 1
+    start: false
+    cmd_vel_topic: /robot1/cmd_vel
+    trajectory: circle      # straight | circle
+    linear_vel: 0.3           # [m/s]  used for straight
+    circle_linear_vel: 0.3    # [m/s]  tangential speed for circle
+    circle_radius: 4.0        # [m]    circle radius (w = v / R)

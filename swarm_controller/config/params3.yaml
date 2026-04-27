@@ -1,0 +1,25 @@
+/**:
+  ros__parameters:
+    global_frame: robot3/map
+    base_footprint: robot3/base_footprint
+    lidar_frame: laser
+    telemetry_topic: /swarm_controller/telemetry3
+    odom_topic: /robot3/odom
+    scan_topic: /robot3/scan
+    logs_dir: /home/user/swarm_ws/swarm_logs
+    robots_num: 2
+    pacemaker_idx: 2
+    gap: 0.5
+    v_max: 0.5
+    acc_max: 0.1
+    kp_theta: 0.3
+    start: false
+    fov_angles: ['-np.pi/4', 'np.pi/4']
+    fov_min_radius: 0.2
+    fov_max_radius: 1.4
+
+    period: 0.1
+    pacemaker_id: 2
+
+    robot_id: 3
+    robots_ids: [2, 3]

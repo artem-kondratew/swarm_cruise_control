@@ -1,6 +1,13 @@
 /**:
   ros__parameters:
     dt: 0.05
+    # plant: 2nd-order Newton + force lag — same model as ACC MPC
+    # (see config/params_swarm_acc.yaml and docs/swarm_acc_mpc.md §3).
+    # On the real robot these are identified via coast-down + step response.
+    m: 2.0                                        # robot mass [kg]
+    b: 1.0                                        # viscous friction [N·s/m]
+    alpha: 4.0                                    # PID-driver gain [N·s/m]
+    tau_F: 0.2                                    # force-response time constant [s]
     robots_ids: [1, 2, 3]
     pacemaker_idx: 1                              # top-level pacemaker (for marker color)
     noise_std: 0.02

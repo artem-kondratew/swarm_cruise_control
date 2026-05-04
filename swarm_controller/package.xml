@@ -14,6 +14,11 @@
 
   <depend>swarm_msgs</depend>
 
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-scipy</exec_depend>
+  <!-- python3-osqp нет в стандартном rosdep — ставится через pip install osqp -->
+  <!-- (нужно для фазы 2: класс SwarmAccController) -->
+
   <export>
     <build_type>ament_python</build_type>
   </export>

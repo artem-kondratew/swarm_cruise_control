@@ -27,6 +27,7 @@ setup(
     entry_points={
         'console_scripts': [
             'swarm_controller = swarm_controller.swarm_controller:main',
+            'swarm_acc_mpc_node = swarm_controller.swarm_acc_mpc_node:main',
             'peer_localization = swarm_controller.peer_localization:main',
             'pacemaker_controller = swarm_controller.pacemaker_controller:main',
             'simulator = swarm_controller.simulator:main',

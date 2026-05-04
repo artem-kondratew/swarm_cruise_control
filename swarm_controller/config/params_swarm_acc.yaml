@@ -1,0 +1,66 @@
+# Parameters for the ACC MPC follower node (swarm_acc_mpc_node).
+#
+# Loaded ALONGSIDE params{N}.yaml (which provides topics, frames, robot_id,
+# pacemaker_id, kp_theta, start). This file holds only MPC-specific parameters
+# — physical plant model + controller tuning + constraints.
+#
+# Topic names and robot_id are NOT here — they are formed in the launch file
+# from the robot index and overridden via the inline parameter dict.
+
+/**:
+  ros__parameters:
+    # ── plant: Newton + force lag (level 2) ───────────────────────────
+    # See docs/swarm_acc_mpc.md §3 for the derivation.
+    # Initial values are reasonable starting guesses; identify on hardware
+    # via coast-down (b) + step response (alpha, tau_F). See future_work.md.
+    m: 2.0           # robot mass [kg]
+    b: 1.0           # viscous friction [N·s/m]
+    alpha: 4.0       # PID-driver gain (force per unit velocity error) [N·s/m]
+    tau_F: 0.2       # force-response time constant [s]
+
+    # ── gap policy: y_gap = dx − d0 − th·v ────────────────────────────
+    d0: 0.5          # minimum gap at v=0 [m]
+    th: 0.0          # time headway [s] → gap_ref = 0.3 + 1.0·v
+
+    # ── MPC tuning ────────────────────────────────────────────────────
+    # Control input is now ACCELERATION (a_cmd), not velocity. The MPC has
+    # an integrator on the velocity command: v_cmd_dot = a_cmd. This makes
+    # the published v_cmd smooth by construction, and move-suppression on
+    # Δa_cmd directly penalises jerk (= Δa / ts).
+    ts: 0.05         # control period [s], must match controller cycle
+    p: 20            # prediction horizon (20 × 50 ms = 1.0 s look-ahead)
+    c: 10            # control horizon (≤ p)
+    s: 3.0           # move-suppression weight (penalty on Δa_cmd ≈ jerk·ts)
+                     # Higher = smoother v_cmd, dampens limit-cycle oscillation.
+    # Output is 4-D: [y_gap, v_rel, F, e_int]. Cost weights form a PI-D-like
+    # structure (proportional / integral / derivative analogues).
+    phi_vals: [0.6, 0.95, 0.6, 0.9]    # reference shaping (4 outputs)
+    q_vals:   [10.0, 1.0, 0.0, 1.0]    # [q_gap, q_vrel, q_F, q_int]
+                                       # PI-D-like with anti-oscillation tuning:
+                                       # q_gap  (P): moderate; values >20
+                                       #             destabilise the cascade.
+                                       # q_vrel (D): damping — needed to avoid
+                                       #             slow limit-cycle (~5 s
+                                       #             period) that pure-integral
+                                       #             control exhibited with the
+                                       #             noisy sliding-mode pacemaker.
+                                       # q_F    : 0 — F ≠ 0 in steady state.
+                                       # q_int  (I): mild integrator; combined
+                                       #             with q_vrel removes residual
+                                       #             offset without windup.
+
+    # ── constraints ───────────────────────────────────────────────────
+    a_min: -0.5      # min commanded acceleration [m/s²]
+    a_max:  0.5      # max commanded acceleration [m/s²]
+    v_cmd_min: 0.0   # min commanded speed (state bound) [m/s]
+    v_cmd_max: 0.5   # max commanded speed (state bound) [m/s]
+    F_min: -5.0      # reserved (not yet enforced as hard constraint)
+    F_max:  5.0      # reserved
+    gap_safe: 0.2    # HARD safety constraint: dx ≥ gap_safe over the
+                     # entire prediction horizon. Set to 0 to disable.
+                     # MPC starts braking proactively as soon as the
+                     # predictor shows a future collision — distinct
+                     # capability that PID/sliding cannot provide.
+
+    # ── runtime safety ────────────────────────────────────────────────
+    telemetry_timeout: 0.5   # [s] stop if no fresh Telemetry within this window

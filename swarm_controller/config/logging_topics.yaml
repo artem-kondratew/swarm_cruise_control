@@ -1,0 +1,10 @@
+topics:
+  - /swarm_controller/telemetry2
+  - /swarm_controller/telemetry3
+  - /robot1/cmd_vel
+  - /robot2/cmd_vel
+  - /robot3/cmd_vel
+  - /robot1/odom
+  - /robot2/odom
+  - /robot3/odom
+  - /pacemaker/path

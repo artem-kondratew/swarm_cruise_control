@@ -4,7 +4,25 @@
     pacemaker_idx: 1
     start: false
     cmd_vel_topic: /robot1/cmd_vel
-    trajectory: circle      # straight | circle
-    linear_vel: 0.3           # [m/s]  used for straight
-    circle_linear_vel: 0.3    # [m/s]  tangential speed for circle
-    circle_radius: 4.0        # [m]    circle radius (w = v / R)
+    trajectory: straight      # straight | circle | lanelet
+    linear_vel: 0.4          # [m/s]  used for straight and lanelet
+    circle_linear_vel: 0.3   # [m/s]  tangential speed for circle
+    circle_radius: 4.0       # [m]    circle radius (w = v / R)
+    lookahead_dist: 1.0      # [m]    pure pursuit lookahead distance
+    # Circle R=4m, center=(0,4), 36 waypoints, counterclockwise, start at (0,0)
+    waypoints_x: [
+       0.000,  0.694,  1.368,  2.000,  2.571,  3.064,
+       3.464,  3.759,  3.939,  4.000,  3.939,  3.759,
+       3.464,  3.064,  2.571,  2.000,  1.368,  0.694,
+       0.000, -0.694, -1.368, -2.000, -2.571, -3.064,
+      -3.464, -3.759, -3.939, -4.000, -3.939, -3.759,
+      -3.464, -3.064, -2.571, -2.000, -1.368, -0.694
+    ]
+    waypoints_y: [
+      0.000,  0.061,  0.241,  0.536,  0.936,  1.429,
+      2.000,  2.632,  3.305,  4.000,  4.695,  5.368,
+      6.000,  6.571,  7.064,  7.464,  7.759,  7.939,
+      8.000,  7.939,  7.759,  7.464,  7.064,  6.571,
+      6.000,  5.368,  4.695,  4.000,  3.305,  2.632,
+      2.000,  1.429,  0.936,  0.536,  0.241,  0.061
+    ]

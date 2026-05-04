@@ -21,6 +21,11 @@ class Simulator(Node):
             ('robots_ids', [1, 2]),
             ('pacemaker_idx', 1),
             ('noise_std', 0.02),
+            # plant: 2nd-order Newton + force lag (matches MPC plant in params_swarm_acc.yaml)
+            ('m', 2.0),       # robot mass [kg]
+            ('b', 1.0),       # viscous friction [N·s/m]
+            ('alpha', 4.0),   # PID-driver gain [N·s/m]
+            ('tau_F', 0.2),   # force-response time constant [s]
             ('init_x', [0.0, -1.0]),
             ('init_y', [0.0, 0.0]),
             ('init_theta', [0.0, 0.0]),
@@ -40,6 +45,11 @@ class Simulator(Node):
         self.robots_ids = list(self.get_parameter('robots_ids').value)
         self.pacemaker_idx = self.get_parameter('pacemaker_idx').value
         self.noise_std = self.get_parameter('noise_std').value
+        # plant parameters
+        self.m = self.get_parameter('m').value
+        self.b = self.get_parameter('b').value
+        self.alpha = self.get_parameter('alpha').value
+        self.tau_F = self.get_parameter('tau_F').value
         init_x = list(self.get_parameter('init_x').value)
         init_y = list(self.get_parameter('init_y').value)
         init_theta = list(self.get_parameter('init_theta').value)
@@ -59,16 +69,27 @@ class Simulator(Node):
         self.follower_map_frame = dict(zip(self.follower_ids, follower_map_frames))
         self.lidar_frame_map = dict(zip(self.follower_ids, lidar_frames))
 
-        # Robot state: {id: [x, y, theta, v, w]}
+        # map frame for every robot: pacemaker uses 'map', followers use their own frames
+        self.robot_map_frame = {rid: self.follower_map_frame.get(rid, 'map')
+                                for rid in self.robots_ids}
+
+        # Robot state: {id: [x, y, theta, v, w, F]}
+        # F is the internal drive force (Newton's 2nd law: m·v̇ = F − b·v).
         self.states = {}
+        # commanded velocities (inputs to plant)
+        self.v_cmd = {}
+        self.w_cmd = {}
         for i, robot_id in enumerate(self.robots_ids):
             self.states[robot_id] = [
                 float(init_x[i]),
                 float(init_y[i]),
                 float(init_theta[i]),
-                0.0,
-                0.0,
+                0.0,   # v
+                0.0,   # w
+                0.0,   # F
             ]
+            self.v_cmd[robot_id] = 0.0
+            self.w_cmd[robot_id] = 0.0
 
         self.tf_broadcaster = TransformBroadcaster(self)
         self.static_tf_broadcaster = StaticTransformBroadcaster(self)
@@ -83,9 +104,11 @@ class Simulator(Node):
 
         self.odom_pubs = {}
         self.scan_pubs = {}
-        for robot_id in self.follower_ids:
+        # odom for every robot so each controller can close the velocity loop
+        for robot_id in self.robots_ids:
             self.odom_pubs[robot_id] = self.create_publisher(
                 Odometry, f'/robot{robot_id}/odom', 10)
+        for robot_id in self.follower_ids:
             self.scan_pubs[robot_id] = self.create_publisher(
                 LaserScan, f'/robot{robot_id}/scan', 10)
 
@@ -107,22 +130,38 @@ class Simulator(Node):
                 f'  robot{rid}: x={state[0]:.2f}, y={state[1]:.2f}, theta={state[2]:.2f}')
 
     def _cmd_vel_cb(self, msg: Twist, robot_id: int):
-        self.states[robot_id][3] = msg.linear.x
-        self.states[robot_id][4] = msg.angular.z
+        # desired velocity from the controller; applied to states via lag in _step
+        self.v_cmd[robot_id] = msg.linear.x
+        self.w_cmd[robot_id] = msg.angular.z
 
     def _step(self):
         for robot_id, state in self.states.items():
-            x, y, theta, v, w = state
+            x, y, theta, v, w, F = state
+            v_cmd = self.v_cmd[robot_id]
+
+            # 2nd-order longitudinal: Newton + force lag.
+            # Same plant as the ACC MPC model (docs/swarm_acc_mpc.md §3).
+            #   m·v̇ = F − b·v
+            #   τ_F·Ḟ = α·(v_cmd − v) + b·v − F
+            v_dot = (F - self.b * v) / self.m
+            F_dot = (self.alpha * (v_cmd - v) + self.b * v - F) / self.tau_F
+            v += self.dt * v_dot
+            F += self.dt * F_dot
+
+            # angular: no lag (fast inner loop assumption)
+            w = self.w_cmd[robot_id]
+
             x += v * np.cos(theta) * self.dt
             y += v * np.sin(theta) * self.dt
             theta += w * self.dt
             theta = float(np.arctan2(np.sin(theta), np.cos(theta)))
-            self.states[robot_id] = [x, y, theta, v, w]
+            self.states[robot_id] = [x, y, theta, v, w, F]
 
         now = self.get_clock().now().to_msg()
         self._publish_tfs(now)
+        for robot_id in self.robots_ids:
+            self._publish_odom(robot_id, now)
         for follower_id in self.follower_ids:
-            self._publish_odom(follower_id, now)
             self._publish_scan(follower_id, now)
         self._publish_markers(now)
 
@@ -185,12 +224,13 @@ class Simulator(Node):
 
     # ── Odometry ─────────────────────────────────────────────────────────────
 
-    def _publish_odom(self, follower_id: int, stamp):
-        x, y, theta, v, w = self.states[follower_id]
+    def _publish_odom(self, robot_id: int, stamp):
+        # F is internal — not published in odom
+        x, y, theta, v, w, _F = self.states[robot_id]
         odom = Odometry()
         odom.header.stamp = stamp
-        odom.header.frame_id = self.follower_map_frame[follower_id]
-        odom.child_frame_id = f'robot{follower_id}/base_footprint'
+        odom.header.frame_id = self.robot_map_frame[robot_id]
+        odom.child_frame_id = f'robot{robot_id}/base_footprint'
         odom.pose.pose.position.x = x
         odom.pose.pose.position.y = y
         odom.pose.pose.position.z = 0.0
@@ -201,7 +241,7 @@ class Simulator(Node):
         odom.pose.pose.orientation.w = float(q[3])
         odom.twist.twist.linear.x = v
         odom.twist.twist.angular.z = w
-        self.odom_pubs[follower_id].publish(odom)
+        self.odom_pubs[robot_id].publish(odom)
 
     # ── LaserScan ────────────────────────────────────────────────────────────
 
@@ -262,7 +302,7 @@ class Simulator(Node):
         markers = MarkerArray()
 
         for robot_id, state in self.states.items():
-            x, y, theta, _, _ = state
+            x, y, theta = state[0], state[1], state[2]
             is_pacemaker = (robot_id == self.pacemaker_idx)
             q = Rotation.from_euler('z', theta).as_quat()
 

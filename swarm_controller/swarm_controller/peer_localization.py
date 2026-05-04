@@ -83,17 +83,28 @@ class PeerLocalizer(Node):
         
         self.create_subscription(Odometry, odom_topic, self.velocity_callback, 10)
         self.create_subscription(LaserScan, scan_topic, self.robot2_scan_callback, 10)
-        
+
+        # peer odom: robot we are following publishes its own odom at /robot{peer_id}/odom
+        # we read peer.twist.linear.x as the leader's longitudinal speed for ACC MPC's v_rel
+        peer_odom_topic = f'/robot{self.pacemaker_id}/odom'
+        self.create_subscription(Odometry, peer_odom_topic, self.peer_odom_callback, 10)
+        self.get_logger().info(f'peer_odom_topic: {peer_odom_topic}')
+
         self.telemetry_pub = self.create_publisher(Telemetry, telemetry_topic, 10)
-        
+
         # vars init
-        
+
         self.init_vels = False
-        
+
         self.telemetry = None
-        
+
         self.vels = (0.0, 0.0)
-        
+
+        # peer state from leader's odom
+        self.peer_v_from_odom = 0.0
+        self.peer_odom_stamp = None
+        self.peer_odom_timeout = 0.5  # [s] consider peer odom stale beyond this
+
         self.lidar_to_bf = None
         self.bf_to_global = None
         
@@ -101,8 +112,14 @@ class PeerLocalizer(Node):
         v = msg.twist.twist.linear.x
         w = msg.twist.twist.angular.z
         self.vels = (v, w)
-        
+
         self.init_vels = True
+
+    def peer_odom_callback(self, msg: Odometry):
+        # leader's longitudinal speed in its own frame (linear.x).
+        # No projection through θ_peer−θ_follower yet — see future_work.md item 15.
+        self.peer_v_from_odom = msg.twist.twist.linear.x
+        self.peer_odom_stamp = self.get_clock().now()
         
     def robot2_scan_callback(self, msg : LaserScan):
         if self.lidar_to_bf is None or self.bf_to_global is None or not self.init_vels:
@@ -147,7 +164,7 @@ class PeerLocalizer(Node):
         tarr = np.array(tarr)
         
         try:
-            kmeans = KMeans(n_clusters=2).fit(tarr[:, :3, :].squeeze())
+            kmeans = KMeans(n_clusters=2, n_init='auto').fit(tarr[:, :3, :].squeeze())
             
             claster_center = kmeans.cluster_centers_[0] if kmeans.cluster_centers_[0, 0] < kmeans.cluster_centers_[1, 0] else kmeans.cluster_centers_[1]
             
@@ -190,6 +207,14 @@ class PeerLocalizer(Node):
         self.telemetry.v, self.telemetry.w = self.vels
         self.telemetry.peer_x = t_global[0, 0]
         self.telemetry.peer_y = t_global[1, 0]
+
+        # peer_v from leader's odometry; 0 if odom is missing/stale
+        if self.peer_odom_stamp is not None:
+            age = (self.get_clock().now() - self.peer_odom_stamp).nanoseconds * 1e-9
+            self.telemetry.peer_v = self.peer_v_from_odom if age < self.peer_odom_timeout else 0.0
+        else:
+            self.telemetry.peer_v = 0.0
+
         self.telemetry.is_valid = True
         
     def callback(self):

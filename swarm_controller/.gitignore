@@ -3,3 +3,6 @@ install
 log
 __pycache__
 .vscode
+
+# user-saved trajectories (output of trajectory_drawer)
+config/my_trajectory.yaml

@@ -26,6 +26,16 @@ def generate_launch_description():
     )
     controller_type = LaunchConfiguration('controller_type')
 
+    trajectory_file_arg = DeclareLaunchArgument(
+        'trajectory_file',
+        default_value='',
+        description=(
+            'Optional yaml with custom waypoints (e.g. saved from '
+            'trajectory_drawer); forwarded to pacemaker_controller.launch.py'
+        ),
+    )
+    trajectory_file = LaunchConfiguration('trajectory_file')
+
     # ── nodes ───────────────────────────────────────────────────────────────
     simulator = Node(
         package=package_name,
@@ -37,7 +47,8 @@ def generate_launch_description():
     pacemaker = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(launch_dir, 'pacemaker_controller.launch.py')
-        )
+        ),
+        launch_arguments={'trajectory_file': trajectory_file}.items(),
     )
 
     swarm2 = IncludeLaunchDescription(
@@ -73,6 +84,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         controller_type_arg,
+        trajectory_file_arg,
         simulator,
         pacemaker,
         swarm2,

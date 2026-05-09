@@ -9,6 +9,18 @@
     circle_linear_vel: 0.3   # [m/s]  tangential speed for circle
     circle_radius: 4.0       # [m]    circle radius (w = v / R)
     lookahead_dist: 1.0      # [m]    pure pursuit lookahead distance
+    # ── trajectory_file: имя yaml с custom траекторией ─────────────────
+    # Когда непусто — узел открывает этот файл, считывает trajectory и
+    # waypoints_x/y оттуда, и подменяет соответствующие поля.
+    # Path resolution:
+    #   • bare filename / relative path → ищется в swarm_controller/config/
+    #     (та же директория, что и этот yaml — там же drawer сохраняет)
+    #   • absolute path / ~ → как есть
+    # Output из `ros2 run trajectory_drawer draw -o my_trajectory.yaml`
+    # ложится прямо в config/ (через --symlink-install в src) и подхваты-
+    # вается одной строкой ниже. Альтернативно можно передать
+    # `trajectory_file:=...` в ros2 launch (override через --params-file).
+    trajectory_file: ''
     # Circle R=4m, center=(0,4), 36 waypoints, counterclockwise, start at (0,0)
     waypoints_x: [
        0.000,  0.694,  1.368,  2.000,  2.571,  3.064,

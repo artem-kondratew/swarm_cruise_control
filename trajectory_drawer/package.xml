@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>trajectory_drawer</name>
+  <version>0.1.0</version>
+  <description>Simple matplotlib GUI to draw a pacemaker trajectory by clicking waypoints; saves a yaml compatible with swarm_controller's pacemaker_controller (lanelet mode).</description>
+  <maintainer email="artemkondratev5@gmail.com">user</maintainer>
+  <license>BSD-3-Clause</license>
+
+  <exec_depend>python3-matplotlib</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-scipy</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

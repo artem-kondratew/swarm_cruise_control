@@ -15,18 +15,28 @@ action on gap error):
     e_int_dot   = y_gap = dx_err − th·v                  (integrator on gap error)
 
 Output for cost:
-    y = [y_gap, v_rel, F, e_int]                         (n_out = 4)
+    y = [y_gap, v_rel, a, e_int]                          (n_out = 4)
 
-The two integrators give the controller two distinct properties:
+    a = (F − b·v) / m   — physical acceleration, linear in state, ZERO in
+                          steady state. Penalising a² gives clean damping
+                          (no static offset). With q_a = 0 the term is
+                          inert; with q_a > 0 it adds smoothing similar
+                          to the kinematic MPC.
 
-  * `v_cmd` integrator (4th state)  — smooth published velocity, jerk ≈ Δa·dt
-                                       penalised through move suppression on Δu.
-  * `e_int` integrator (6th state)  — accumulates gap error over time.  Cost on
-                                       e_int² guarantees that any non-zero gap
-                                       error grows without bound, so the
-                                       optimiser must drive y_gap → 0 in steady
-                                       state. Removes the "PID-without-I"
-                                       offset that proportional-only MPC has.
+    e_int               — accumulator of y_gap (dx_err − th·v). This is
+                          THE integrator action that the kinematic MPC
+                          gets implicitly through its 5-state dx_err →
+                          v_rel feedback path; the Newton plant has more
+                          dynamics (force lag) and without an explicit
+                          q_int term the cascade ends up with a steady
+                          velocity bias of a few mm/s that integrates
+                          over a long run into a 10–30 cm gap offset.
+                          (Empirically verified: q_int = 0 → +27 cm
+                          offset; q_int = 2 → +1.2 cm; q_int >> 2 has
+                          diminishing returns and starts oscillating.)
+
+The `v_cmd` integrator (4th state) ensures published velocity is smooth;
+move suppression on Δa_cmd directly bounds jerk = Δa · ts.
 
 Constraints:
     a_cmd ∈ [a_min, a_max]                                (input bound)
@@ -57,7 +67,7 @@ class SwarmAccController:
     """Adaptive Cruise Control MPC for a swarm follower."""
 
     n_in = 6   # state: [dx_err, v, v_rel, F, v_cmd, e_int]
-    n_out = 4  # output: [y_gap, v_rel, F, e_int]
+    n_out = 4  # output: [y_gap, v_rel, a, e_int]   (a = (F-b·v)/m)
 
     def __init__(
         self,
@@ -96,12 +106,19 @@ class SwarmAccController:
         assert c_ <= p_, "control horizon c must not exceed prediction horizon p"
 
         # output matrix C (4×6):  y = C @ x   (no Z offset thanks to dx_err state)
-        #  state cols:    dx_err  v   v_rel  F   v_cmd  e_int
+        #  state cols:    dx_err  v             v_rel  F        v_cmd  e_int
         C = np.zeros((n_out, n_in))
         C[0, 0] = 1.0;   C[0, 1] = -self.th     # y_gap = dx_err − th·v
         C[1, 2] = 1.0                            # v_rel
-        C[2, 3] = 1.0                            # F
-        C[3, 5] = 1.0                            # e_int
+        C[2, 1] = -self.b / self.m               # a = (F − b·v) / m  ← zero in
+        C[2, 3] = 1.0 / self.m                   #     steady state (clean cost)
+        C[3, 5] = 1.0                            # e_int (provides integral
+                                                 # action; cost q_int forces
+                                                 # mean(y_gap)→0 without which
+                                                 # the 6-state plant accumulates
+                                                 # mm/s velocity bias into cm
+                                                 # offset over time — verified
+                                                 # empirically in cascade)
         self.C = C
 
         # error correction H = I, F_mat = C @ H
@@ -285,22 +302,25 @@ class SwarmAccController:
 
         # ── constraints ─────────────────────────────────────────────────────
         # 1. input bound on a_cmd:                a_min ≤ u_k ≤ a_max
-        # 2. state bound on v_cmd over horizon:
-        #      v_cmd_k+i = (M_free_v · x_now)_i + (D_v · u)_i ∈ [v_cmd_min, v_cmd_max]
-        # 3. SAFETY: dx ≥ gap_safe (so dx_err ≥ gap_safe − d0) over horizon:
+        # 2. SAFETY: dx ≥ gap_safe (so dx_err ≥ gap_safe − d0) over horizon:
         #      dx_err_k+i = (M_free_dx · x_now)_i + (D_dx · u)_i ≥ gap_safe − d0
         #    Disabled (no row added) when gap_safe ≤ 0 — keeps the QP smaller
         #    when collision avoidance isn't requested.
-        v_cmd_free = self.M_free_v @ x      # (p,)
-        rows = [np.eye(c_), self.D_v]
-        lb_parts = [
-            np.full(c_, self.a_min),
-            np.full(p_, self.v_cmd_min) - v_cmd_free,
-        ]
-        ub_parts = [
-            np.full(c_, self.a_max),
-            np.full(p_, self.v_cmd_max) - v_cmd_free,
-        ]
+        #
+        # NB: a v_cmd state bound used to be enforced over the horizon, but
+        # this kinematic-style anti-windup is achieved instead by clipping
+        # the published v_cmd to [v_cmd_min, v_cmd_max] (see end of method).
+        # Enforcing it as a horizon-wide QP constraint was redundant with
+        # that clip AND artificially throttled control authority: at
+        # v_cmd_est ≈ v_peer ≈ 0.4 the available v_cmd headroom (0.1) had to
+        # absorb the cumulative integral of u over up to p=20 steps, with
+        # the far-horizon rows binding first even though receding-horizon
+        # only ever applies u[0]. Removing it brings Newton MPC's QP
+        # structurally in line with the kinematic MPC's QP (only input bound
+        # + safety).  M_free_v / D_v are kept in __init__ for easy A/B.
+        rows = [np.eye(c_)]
+        lb_parts = [np.full(c_, self.a_min)]
+        ub_parts = [np.full(c_, self.a_max)]
         if self.gap_safe > 0:
             dx_err_free = self.M_free_dx @ x
             rows.append(self.D_dx)
@@ -342,9 +362,16 @@ class SwarmAccController:
         self._x_predicted = self.A @ x + self.B * a_opt + self.H @ ex
         self._u_prev = a_opt
 
-        # publish v_cmd from predictor (clamped for safety)
-        v_cmd_published = float(np.clip(
+        # anti-windup: clip the integrator state v_cmd to the published
+        # range so the predictor cannot drift above what the plant actually
+        # receives.  Mirrors the kinematic node's clip on `_v_cmd_published`
+        # — necessary now that the v_cmd state bound is no longer enforced
+        # inside the QP.
+        self._x_predicted[4] = float(np.clip(
             self._x_predicted[4], self.v_cmd_min, self.v_cmd_max))
+
+        # publish v_cmd from predictor (clamped for safety)
+        v_cmd_published = float(self._x_predicted[4])
 
         return v_cmd_published, a_opt, y.copy()
 

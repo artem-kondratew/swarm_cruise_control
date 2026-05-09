@@ -44,11 +44,14 @@ class SwarmAccMpcNode(Node):
             ('ts', 0.05),
             ('p', 20),
             ('c', 10),
-            ('s', 3.0),
-            # length 4: [y_gap, v_rel, F, e_int]
-            # PI-D-like cost with anti-oscillation tuning — see yaml
+            ('s', 20.0),
+            # length 4: [y_gap, v_rel, a, e_int]   (a = (F-b·v)/m)
+            # q_int=2 is the integrator action that brings cascade offset
+            # from +27 cm (no integrator) down to ~1 cm. q_a=0: the move
+            # suppression s=20 covers the same role and adding q_a > 0
+            # empirically grew the offset.
             ('phi_vals', [0.6, 0.95, 0.6, 0.9]),
-            ('q_vals', [10.0, 1.0, 0.0, 1.0]),
+            ('q_vals', [10.0, 1.0, 0.0, 2.0]),
             # constraints — input is a_cmd (acceleration), not v_cmd
             ('a_min', -0.5),
             ('a_max',  0.5),
@@ -213,7 +216,7 @@ class SwarmAccMpcNode(Node):
             self.get_logger().info(
                 f'dx={dx:.3f} v={v:.3f} v_rel={v_rel:+.3f}  '
                 f'a_cmd={a_cmd:+.3f} v_cmd={v_cmd:.3f} w={w_cmd:+.3f}  '
-                f'y_gap={y[0]:+.3f} F_pred={y[2]:+.3f}',
+                f'y_gap={y[0]:+.3f} a_pred={y[2]:+.3f}',
             )
 
     # ── helpers ──────────────────────────────────────────────────────────────

@@ -20,7 +20,7 @@
 
     # ── gap policy: y_gap = dx − d0 − th·v ────────────────────────────
     d0: 0.5          # minimum gap at v=0 [m]
-    th: 0.0          # time headway [s] → gap_ref = 0.3 + 1.0·v
+    th: 1.0          # time headway [s] → gap_ref = 0.3 + 1.0·v
 
     # ── MPC tuning ────────────────────────────────────────────────────
     # Control input is now ACCELERATION (a_cmd), not velocity. The MPC has
@@ -30,24 +30,21 @@
     ts: 0.05         # control period [s], must match controller cycle
     p: 20            # prediction horizon (20 × 50 ms = 1.0 s look-ahead)
     c: 10            # control horizon (≤ p)
-    s: 3.0           # move-suppression weight (penalty on Δa_cmd ≈ jerk·ts)
-                     # Higher = smoother v_cmd, dampens limit-cycle oscillation.
-    # Output is 4-D: [y_gap, v_rel, F, e_int]. Cost weights form a PI-D-like
-    # structure (proportional / integral / derivative analogues).
+    s: 20.0          # move-suppression weight (penalty on Δa_cmd ≈ jerk·ts).
+                     # Higher than kinematic MPC (s=3) because Newton plant
+                     # is 2nd-order in v (force lag adds an extra pole), and
+                     # without the heavier damping the cascade picks up
+                     # 60–150 s slow drift on top of any tracking error.
+    # Output is 4-D: [y_gap, v_rel, a, e_int]   where a = (F − b·v)/m.
+    # Empirical sweep on cascade r2 mean error:
+    #   q_int = 0  → +27 cm  (tiny v bias integrates into huge offset)
+    #   q_int = 1  → +10 cm
+    #   q_int = 2  →  +1 cm   ← chosen
+    # Higher q_int starts to oscillate against the gap_ref ramp from th>0.
+    # q_a is kept at 0 because the move suppression `s` already provides
+    # the damping that q_a would, and adding it gave persistent offset.
     phi_vals: [0.6, 0.95, 0.6, 0.9]    # reference shaping (4 outputs)
-    q_vals:   [10.0, 1.0, 0.0, 1.0]    # [q_gap, q_vrel, q_F, q_int]
-                                       # PI-D-like with anti-oscillation tuning:
-                                       # q_gap  (P): moderate; values >20
-                                       #             destabilise the cascade.
-                                       # q_vrel (D): damping — needed to avoid
-                                       #             slow limit-cycle (~5 s
-                                       #             period) that pure-integral
-                                       #             control exhibited with the
-                                       #             noisy sliding-mode pacemaker.
-                                       # q_F    : 0 — F ≠ 0 in steady state.
-                                       # q_int  (I): mild integrator; combined
-                                       #             with q_vrel removes residual
-                                       #             offset without windup.
+    q_vals:   [10.0, 1.0, 0.0, 2.0]    # [q_gap, q_vrel, q_a, q_int]
 
     # ── constraints ───────────────────────────────────────────────────
     a_min: -0.5      # min commanded acceleration [m/s²]

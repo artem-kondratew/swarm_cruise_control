@@ -1,0 +1,45 @@
+# Parameters for the kinematic ACC MPC follower node (swarm_acc_kin_mpc_node).
+#
+# adas-style 5-state controller. Plant has only one parameter (`tau`,
+# acceleration lag) — much simpler than the Newton variant which has m, b,
+# alpha, tau_F.
+#
+# Loaded ALONGSIDE params{N}.yaml (which provides topics, frames, robot_id,
+# pacemaker_id, kp_theta, start). Topic names and robot_id are formed in the
+# launch file from the robot index and overridden via the inline parameter dict.
+
+/**:
+  ros__parameters:
+    # ── plant: kinematic acceleration lag (adas-style) ────────────────
+    # See docs/swarm_acc_mpc.md (kinematic variant section, TBD).
+    # Identify on hardware via a SINGLE step-response experiment: command
+    # a 0 → 0.4 m/s step, fit `tau` from the velocity response.
+    tau: 0.2         # acceleration time constant [s]
+
+    # ── gap policy: y_gap = dx − d0 − th·v ────────────────────────────
+    d0: 0.5          # minimum gap at v=0 [m]
+    th: 1.0         # time headway [s]
+
+    # ── MPC tuning ────────────────────────────────────────────────────
+    # Control input is ACCELERATION (a_cmd). v_cmd is integrated in the
+    # node (strategy "B2") for smooth published velocity command.
+    ts: 0.05         # control period [s]
+    p: 20            # prediction horizon (1.0 s look-ahead)
+    c: 10            # control horizon (≤ p)
+    s: 3.0           # move-suppression weight (penalty on Δa_cmd ≈ jerk·ts)
+
+    # Output is 4-D: [y_gap, v_rel, a, j]   — adas-exact formulation.
+    phi_vals: [0.6, 0.95, 0.6, 0.6]    # reference shaping per output
+    q_vals:   [10.0, 1.0, 1.0, 1.0]    # cost weights — all four outputs penalised
+                                       # q[0] gap_err, q[1] v_rel,
+                                       # q[2] a (smoothness), q[3] j (smoothness)
+
+    # ── constraints ───────────────────────────────────────────────────
+    a_min:     -0.5  # min commanded acceleration [m/s²]
+    a_max:      0.5  # max commanded acceleration [m/s²]
+    v_cmd_min:  0.0  # min published v_cmd [m/s] (clamp on integrator)
+    v_cmd_max:  0.5  # max published v_cmd [m/s]
+    gap_safe:   0.2  # HARD safety constraint: dx ≥ gap_safe
+
+    # ── runtime safety ────────────────────────────────────────────────
+    telemetry_timeout: 0.5   # [s] stop if no fresh Telemetry within this window

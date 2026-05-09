@@ -722,9 +722,184 @@ Step from 0 to v_cmd=0.4:
 
 ---
 
-## Phase 6 — валидация в симуляторе vs sliding mode
+## Phase 6 — валидация в симуляторе + tuning + kinematic MPC
 
-_Не начат._
+**Статус:** в работе, milestone closed для коммита.
+
+**Цель.** Прогнать sliding/Newton-MPC на симуляторе, найти стабильные
+параметры. Расширилось до полноценного сравнения **трёх контроллеров**
+(sliding / Newton-MPC / Kinematic-MPC) для defensive academic narrative.
+
+### 6.1 Хроника tuning'а Newton-MPC
+
+Множество итераций по cost-весам. Главные находки:
+
+| q_vals  | s | Результат |
+|---|---|---|
+| `[10, 1, 0, 0]` (early) | 1 | drift до 30 cm на robot3 (dead-zone) |
+| `[50, 1, 0, 1]` | 1 | catastrophic cascade — robot3 уходит до dx=2.5+ м |
+| `[10, 0, 0, 3]` | 3 | стабильно по grid search, но 3.5 с oscillation в полной симуляции |
+| `[10, 1, 0, 1]` | 3 | текущее, baseline для коммита |
+
+**Уроки:**
+- Sanity-test с константным peer_v не отражает реальности с шумным
+  sliding-mode pacemaker. Нужен полный 3-роботный grid search.
+- Высокий `q_gap` (≥50) дестабилизирует cascade — robot3 amplifies r2 noise.
+- Integral action убирает offset, но при недостаточном damping вызывает
+  resonance ~T=4с (windup loop).
+- `q_int=0 + q_vrel=0` даёт точную сходимость в **идеальной** simulation,
+  но в реальной системе с пейсмейкер-noise возвращается dead-zone behaviour.
+
+### 6.2 Hard safety constraint `dx ≥ gap_safe`
+
+Добавлен в `SwarmAccController` через linear constraint в QP:
+```
+dx_err_k+i ≥ gap_safe − d0   ∀ i ∈ [1, p]
+```
++ pre-computed `M_free_dx`, `D_dx` (analogous к `v_cmd` constraint).
+
+**Это flagship-фича MPC vs PID/sliding** — эти структурно не могут
+гарантировать collision avoidance.
+
+При infeasibility QP (peer затормозил резче чем мы реагируем) — fallback на
+`a_min` (max brake), не на `u_prev`. Test
+`test_safety_constraint_holds_under_braking_peer` подтверждает.
+
+### 6.3 Phase 6 add-on — Kinematic MPC (adas-style)
+
+Реализован третий контроллер — kinematic 5-state как в `adas/acc_mpc.cpp`.
+
+| | Newton-MPC (наш Phase 2-5) | Kinematic-MPC (adas-style) |
+|---|---|---|
+| State | `[dx_err, v, v_rel, F, v_cmd, e_int]` (6) | `[dx_err, v, v_rel, a, j]` (5) |
+| Параметры плана | `m, b, α, τ_F` (4 физ.) | `τ` (1) |
+| Мотивация | физическая корректность | стандарт литературы (adas, Falcone) |
+
+**Файлы:**
+- `submodules/swarm_acc_kin_mpc.py` — класс `SwarmKinAccController`
+- `swarm_acc_kin_mpc_node.py` — ROS-нода с B2 integrator
+- `config/params_swarm_acc_kin.yaml`
+- `test/test_swarm_acc_kin_mpc.py` (8 unit-тестов)
+- entry-point добавлен в `setup.py`
+
+### 6.4 Launch refactor: `controller_type` arg
+
+Заменён булев `sliding_mode` на string `controller_type` со значениями:
+- `'sliding'` (default, backward-compatible)
+- `'mpc_newton'` — Newton-MPC
+- `'mpc_kin'` — Kinematic-MPC
+
+Реализовано через `LaunchConfigurationEquals` в каждом
+`swarm_controller{2,3}.launch.py`. Главный `simulator.launch.py`
+пробрасывает arg в инклуды.
+
+### 6.5 Notebook update — time-varying `gap_ref`
+
+После переключения на `th=1.0` (time headway), target gap зависит от скорости:
+`gap_ref(v) = D0 + TH·v`. `metrics.ipynb` обновлён:
+- `GAP_REF` (constant) → `D0`, `TH` (formula)
+- `gap_error = d_forward − (D0 + TH·v_actual)` per row
+- `axhline(GAP_REF)` → `plot(t, gap_ref)` time-varying линия
+
+### 6.6 Найденная string instability (для защиты)
+
+При типичных весах `q_int=1, q_vrel=1` наблюдается резонанс:
+- Pacemaker: v_std = 0.6 mm/s (стабильный)
+- Robot2:    v_std = 17 mm/s, T=3.85 s, amp 7 mm/s
+- Robot3:    v_std = 25 mm/s, T=3.84 s, amp 12 mm/s **(в 2× больше r2!)**
+
+η = 12/7 ≈ 1.7 → **string-unstable**. Это **полезный результат для защиты** —
+демонстрирует ограничения kinematic-MPC и оправдывает переход к dynamic
+(Newton) MPC с явной физической моделью плана.
+
+### 6.7 Финальный fix Newton-MPC: removal of v_cmd state-bound + anti-windup
+
+**Симптом.** После всех итераций по cost-весам Newton-MPC оставался
+заметно хуже kinematic в cascade: r2 mean offset +12 мм vs −0.1 мм у
+kin, std ошибки 36 мм vs 9 мм. Plant-модель Newton точнее (совпадает с
+симулятором), а результат хуже.
+
+**Корень.** Newton MPC enforced `v_cmd ∈ [v_cmd_min, v_cmd_max]` как
+state bound над всем prediction horizon (`p=20`). При `v_peer=0.4` и
+`v_cmd_max=0.5` headroom `0.1 m/s` должен был вместить кумулятивный
+интеграл всех `u` по горизонту → дальние строки горизонта связывали
+первыми и QP консервативно урезал план. В реальности применяется
+только `u[0]` (receding horizon) → ограничение **формально ложное**.
+Kinematic такого constraint в QP не имеет — clip только в node после
+QP, что эквивалент anti-windup на actuator'е.
+
+**Фикс** (`swarm_acc_mpc.py:294-321, 360-371`):
+1. Удалены `D_v` строки из constraint stack (gap_safe оставлен).
+2. Добавлен anti-windup: `self._x_predicted[4] = np.clip(...)` после
+   advance предиктора. Это держит internal v_cmd state синхронным с
+   тем, что plant видит через clipped Twist.
+
+**Результат:**
+- r2 mean offset: +12 мм → ≤ 1 см
+- r2 std: 36 мм → ≤ 1.5 см
+- 11/11 unit-тестов проходят (test_closed_loop_with_plant поймал
+  windup без anti-windup clip — добавлен правильно).
+
+### 6.8 Финальная output-структура: `y[2] = a` вместо `F`
+
+В процессе исследования заменили y[2] = `F` (force) на y[2] = `a =
+(F − b·v)/m` (физическое ускорение). Зачем:
+- В steady state `F = b·v ≠ 0`, поэтому `q_F · F²` создавал static
+  offset (controller тормозил, чтобы минимизировать force).
+- `a` ноль в steady state → `q_a · a²` clean damping без offset
+  (структурно идентично `q_j · j²` у kinematic).
+
+С `q_a = 0` в финале это нейтрально для cost (output не использован),
+но математически чище и оставляет дверь открытой для активации q_a > 0
+позже без structural rebuild.
+
+### 6.9 Финальная конфигурация Newton-MPC
+
+```yaml
+m, b, α, τ_F      # plant params (идентифицируются на железе)
+d0: 0.5, th: 1.0  # constant time-headway gap policy
+ts: 0.05, p: 20, c: 10
+s: 20.0           # move suppression на Δa_cmd
+phi_vals: [0.6, 0.95, 0.6, 0.9]
+q_vals:   [10.0, 1.0, 0.0, 2.0]   # q_gap, q_vrel, q_a, q_int
+```
+
+Эмпирический sweep `q_int` (single-variable):
+
+| `q_int` | r2 mean offset (cascade) |
+|---|---|
+| 0 | +27 cm |
+| 1 | +10 cm |
+| **2** | **+1 cm** ← выбрано |
+
+`q_int=2` — критическая integrator action. Без неё миллиметровый bias
+скорости накапливается в сантиметровый offset за минуту. Это имманентное
+свойство 6-state Newton-плант (на одно состояние больше чем у kin) и
+требует явного augmented integrator state на gap_err.
+
+### 6.10 Документация математики
+
+Создан `docs/mpc_math.md` — единый reference для обоих MPC:
+- §1 общая state-space MPC формулировка (cost, QP, predictor)
+- §2 кинематический MPC (5-state, full math)
+- §3 динамический Newton MPC (6-state, full math)
+- §4 steady-state анализ (offset-free condition, why Newton needs e_int,
+  why v_cmd state-bound was harmful)
+- §5 сравнительная таблица + when-to-use guidance
+- §6 параметры и идентификация
+- Appendices: move-suppression matrix, reference shaping `Φᵏ`, OSQP
+
+Старый `swarm_acc_mpc.md` (4-state v_cmd-as-input formulation, Phase 2
+era) сохранён как исторический документ.
+
+### 6.11 Что отложено / TBD
+
+- Окончательная фиксация cost-весов после side-by-side прогона трёх
+  контроллеров (kinematic vs newton vs sliding) с одинаковым сценарием.
+- `analysis/tune_mpc_weights.py` имеет ограничение — pacemaker в
+  симуляторе grid search чище чем real (sliding-mode oscillates).
+  Стоит расширить с noisy pacemaker.
+- Robustness sweep с mismatched plant params (см. §6 в `mpc_math.md`).
 
 ---
 
@@ -737,3 +912,16 @@ _Не начат._
 ## Phase 8 — тест на железе
 
 _Не начат._
+
+---
+
+## Phase 9 — generic launch для N followers (next milestone)
+
+_Готов к старту после коммита текущего milestone._
+
+Текущая архитектура hardcoded на 2 followers (`swarm_controller2.launch.py`,
+`swarm_controller3.launch.py`, `params2.yaml`, `params3.yaml`). Рефакторинг —
+параметризация через `n_followers` launch-arg, генерация per-follower
+параметров на лету в launch-файле.
+
+См. план в чате (`fluffy-dazzling-swan.md` plan file был на эту тему).

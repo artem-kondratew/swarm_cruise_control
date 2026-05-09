@@ -14,16 +14,17 @@ def generate_launch_description():
     launch_dir = os.path.join(pkg_dir, 'launch')
 
     # ── launch arguments ────────────────────────────────────────────────────
-    sliding_mode_arg = DeclareLaunchArgument(
-        'sliding_mode',
-        default_value='true',
+    controller_type_arg = DeclareLaunchArgument(
+        'controller_type',
+        default_value='sliding',
         description=(
-            'If true (default): Python sliding-mode controller for followers. '
-            'If false: ACC MPC controller (swarm_acc_mpc_node). '
-            'Propagated to swarm_controller2/3.launch.py.'
+            "Follower controller type, propagated to swarm_controller{2,3}.launch.py:\n"
+            "  'sliding'    → Python sliding-mode (default, baseline)\n"
+            "  'mpc_newton' → Newton + force-lag MPC (physical, 6-state)\n"
+            "  'mpc_kin'    → Kinematic adas-style MPC (5-state, 1 param τ)"
         ),
     )
-    sliding_mode = LaunchConfiguration('sliding_mode')
+    controller_type = LaunchConfiguration('controller_type')
 
     # ── nodes ───────────────────────────────────────────────────────────────
     simulator = Node(
@@ -43,14 +44,14 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             os.path.join(launch_dir, 'swarm_controller2.launch.py')
         ),
-        launch_arguments={'sliding_mode': sliding_mode}.items(),
+        launch_arguments={'controller_type': controller_type}.items(),
     )
 
     swarm3 = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(launch_dir, 'swarm_controller3.launch.py')
         ),
-        launch_arguments={'sliding_mode': sliding_mode}.items(),
+        launch_arguments={'controller_type': controller_type}.items(),
     )
 
     rviz = Node(
@@ -71,7 +72,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        sliding_mode_arg,
+        controller_type_arg,
         simulator,
         pacemaker,
         swarm2,
